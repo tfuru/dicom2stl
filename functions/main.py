@@ -13,9 +13,8 @@ from firebase_admin import initialize_app
 # parameter in the decorator, e.g. @https_fn.on_request(max_instances=5).
 set_global_options(max_instances=10)
 
-# initialize_app()
-#
-#
-# @https_fn.on_request()
-# def on_request_example(req: https_fn.Request) -> https_fn.Response:
-#     return https_fn.Response("Hello world!")
+initialize_app()
+
+@https_fn.on_request()
+def on_request_example(req: https_fn.Request) -> https_fn.Response:
+    return https_fn.Response("Hello world!")
