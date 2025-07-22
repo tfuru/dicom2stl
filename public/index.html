@@ -7,6 +7,7 @@
 
     <!-- update the version number as needed -->
     <script defer src="/__/firebase/12.0.0/firebase-app-compat.js"></script>
+    <script defer src="/__/firebase/12.0.0/firebase-auth-compat.js"></script>
     <!-- include only the Firebase features as you need -->
     <script defer src="/__/firebase/12.0.0/firebase-functions-compat.js"></script>
     <script defer src="/__/firebase/12.0.0/firebase-storage-compat.js"></script>
@@ -36,6 +37,12 @@
         text-align: center;
         max-width: 600px;
         width: 100%;
+      }
+      .auth-container {
+        margin-bottom: 20px;
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
       }
       h1 {
         color: #1a73e8;
@@ -77,6 +84,23 @@
       .upload-btn:not(:disabled):hover {
         background-color: #185abc;
       }
+      .auth-btn {
+        background-color: #ffffff;
+        color: #4285F4;
+        border: 1px solid #dadce0;
+        padding: 10px 15px;
+        border-radius: 4px;
+        font-size: 14px;
+        cursor: pointer;
+        transition: background-color 0.2s;
+      }
+      .auth-btn:hover {
+        background-color: #f8f9fa;
+      }
+      #user-info {
+        margin-right: 15px;
+        font-size: 14px;
+      }
       #status {
         margin-top: 20px;
         font-size: 14px;
@@ -89,28 +113,43 @@
         max-height: 150px;
         overflow-y: auto;
       }
+      #result a.upload-btn {
+        display: inline-block;
+        margin-top: 10px;
+        text-decoration: none;
+        width: auto; /* .upload-btn の幅を上書き */
+      }
     </style>
   </head>
   <body>
     <div class="container">
+      <div class="auth-container">
+        <span id="user-info"></span>
+        <button id="login-button" class="auth-btn">Googleでログイン</button>
+        <button id="logout-button" class="auth-btn" style="display: none;">ログアウト</button>
+      </div>
+
       <h1>DICOM to STL Converter</h1>
       <p>DICOMファイル群（フォルダ）を選択し、アップロードして3Dモデルに変換します。</p>
       
-      <label for="dicom-files" class="upload-area">
-        <div id="upload-prompt">クリックまたはドラッグ＆ドロップで<br>DICOMファイルを選択</div>
-        <div id="file-list"></div>
-        <input type="file" id="dicom-files" multiple webkitdirectory directory>
-      </label>
-      
-      <button id="upload-button" class="upload-btn" disabled>アップロードして変換開始</button>
-      
-      <div id="status"></div>
-      <div id="result"></div>
+      <div id="upload-container" style="display: none;">
+        <label for="dicom-files" class="upload-area">
+          <div id="upload-prompt">クリックまたはドラッグ＆ドロップで<br>DICOMファイルを選択</div>
+          <div id="file-list"></div>
+          <input type="file" id="dicom-files" multiple webkitdirectory directory>
+        </label>
+        
+        <button id="upload-button" class="upload-btn" disabled>アップロードして変換開始</button>
+        
+        <div id="status"></div>
+        <div id="result"></div>
+      </div>
     </div>
 
     <script>
       document.addEventListener('DOMContentLoaded', function() {
         try {
+          const auth = firebase.auth();
           const storage = firebase.storage();
           const functions = firebase.functions();
 
@@ -121,8 +160,14 @@
           const uploadArea = document.querySelector('.upload-area');
           const fileListDiv = document.getElementById('file-list');
           const uploadPrompt = document.getElementById('upload-prompt');
+          const loginButton = document.getElementById('login-button');
+          const logoutButton = document.getElementById('logout-button');
+          const userInfoDiv = document.getElementById('user-info');
+          const uploadContainer = document.getElementById('upload-container');
 
+          let currentUser = null;
           let selectedFiles = [];
+          let jobCheckInterval = null;
 
           uploadArea.addEventListener('click', () => fileInput.click());
 
@@ -139,6 +184,11 @@
           });
 
           function handleFiles(files) {
+            // 新しいファイルが選択されたら、以前のポーリングを解除しUIをリセット
+            if (jobCheckInterval) {
+              clearInterval(jobCheckInterval);
+              jobCheckInterval = null;
+            }
             selectedFiles = Array.from(files).filter(file => file.name.toLowerCase().endsWith('.dcm') || !file.name.includes('.'));
             if (selectedFiles.length > 0) {
               uploadPrompt.style.display = 'none';
@@ -151,8 +201,119 @@
             }
           }
 
+          // Firebase Authentication
+          const provider = new firebase.auth.GoogleAuthProvider();
+
+          loginButton.addEventListener('click', () => {
+            auth.signInWithPopup(provider).catch(error => {
+              console.error("Authentication failed:", error);
+              statusDiv.textContent = 'ログインに失敗しました。';
+            });
+          });
+
+          logoutButton.addEventListener('click', () => {
+            auth.signOut();
+          });
+
+          auth.onAuthStateChanged(user => {
+            currentUser = user;
+            if (user) {
+              // User is signed in.
+              userInfoDiv.textContent = `${user.displayName} としてログイン中`;
+              loginButton.style.display = 'none';
+              logoutButton.style.display = 'block';
+              uploadContainer.style.display = 'block';
+            } else {
+              // User is signed out.
+              if (jobCheckInterval) {
+                clearInterval(jobCheckInterval);
+                jobCheckInterval = null;
+              }
+              // User is signed out.
+              userInfoDiv.textContent = '';
+              loginButton.style.display = 'block';
+              logoutButton.style.display = 'none';
+              uploadContainer.style.display = 'none';
+              // Reset upload state
+              selectedFiles = [];
+              fileListDiv.innerHTML = '';
+              uploadPrompt.style.display = 'block';
+              uploadButton.disabled = true;
+              statusDiv.textContent = '';
+              resultDiv.innerHTML = '';
+            }
+          });
+
+          function startPolling(uploadId) {
+            if (jobCheckInterval) {
+              clearInterval(jobCheckInterval);
+            }
+
+            const POLLING_TIMEOUT_MS = 600000; // 10分 (バックエンド処理のタイムアウト540秒 + バッファ)
+            const startTime = Date.now();
+
+            const checkStatus = async () => {
+              if (Date.now() - startTime > POLLING_TIMEOUT_MS) {
+                clearInterval(jobCheckInterval);
+                jobCheckInterval = null;
+                statusDiv.textContent = '処理がタイムアウトしました。しばらくしてからもう一度お試しください。';
+                uploadButton.disabled = false;
+                return;
+              }
+
+              try {
+                // REST APIのエンドポイントURL
+                const functionUrl = 'https://check-job-status-gnlwuburpa-uw.a.run.app';
+                const response = await fetch(functionUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ uploadId: uploadId }),
+                });
+
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                const data = await response.json();
+
+                switch (data.status) {
+                  case 'processing':
+                    statusDiv.textContent = '変換処理中です...';
+                    break;
+                  case 'completed':
+                    clearInterval(jobCheckInterval);
+                    jobCheckInterval = null;
+                    statusDiv.textContent = '変換が完了しました。';
+                    resultDiv.innerHTML = `
+                      <a href="${data.downloadUrl}" class="upload-btn" download="model.stl">
+                          STLをダウンロード
+                      </a>`;
+                    uploadButton.disabled = false; // 次のアップロードのためにボタンを有効化
+                    break;
+                  case 'error':
+                    clearInterval(jobCheckInterval);
+                    jobCheckInterval = null;
+                    statusDiv.textContent = `エラーが発生しました: ${data.message}`;
+                    uploadButton.disabled = false;
+                    break;
+                  case 'pending':
+                    // メッセージは変更しない (バックエンド処理待機中...)
+                    break;
+                  default:
+                    console.log('Unknown status:', data.status);
+                }
+              } catch (error) {
+                console.error('Error checking job status:', error);
+                clearInterval(jobCheckInterval);
+                jobCheckInterval = null;
+                statusDiv.textContent = 'ステータスの確認中にエラーが発生しました。';
+                uploadButton.disabled = false;
+              }
+            };
+            jobCheckInterval = setInterval(checkStatus, 5000); // 5秒ごとに確認
+          }
+
           uploadButton.addEventListener('click', async () => {
-            if (selectedFiles.length === 0) return;
+            if (selectedFiles.length === 0 || !currentUser) return;
 
             uploadButton.disabled = true;
             statusDiv.textContent = 'アップロードを開始します...';
@@ -164,7 +325,7 @@
 
             const uploadPromises = selectedFiles.map(file => {
               const path = file.webkitRelativePath || file.name;
-              const filePath = `uploads/${uploadId}/${path}`;
+              const filePath = `uploads/${currentUser.uid}/${uploadId}/${path}`;
               const uploadTask = storage.ref(filePath).put(file);
 
               uploadTask.on('state_changed', (snapshot) => {
@@ -181,6 +342,7 @@
               await Promise.all(uploadPromises);
               statusDiv.textContent = 'アップロード完了。STLへの変換を開始します... (バックエンド処理待機中)';
               resultDiv.innerHTML = `処理ID: ${uploadId}`;
+              startPolling(uploadId);
             } catch (error) {
               console.error('Upload failed:', error);
               statusDiv.textContent = 'アップロード中にエラーが発生しました。';

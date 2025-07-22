@@ -4,6 +4,7 @@ import pydicom
 import traceback
 import numpy as np
 from skimage import measure
+import datetime
 from stl import mesh
 
 from firebase_admin import initialize_app, storage as admin_storage, credentials
@@ -15,9 +16,81 @@ set_global_options(region=options.SupportedRegion.US_WEST1, timeout_sec=540)
 
 initialize_app()
 
-@https_fn.on_request()
-def on_request_example(request: https_fn.Request) -> str:
-    return https_fn.Response("Hello world!")
+@https_fn.on_request(
+    memory=options.MemoryOption.MB_256,
+    timeout_sec=30,  # タイムアウトを30秒に設定
+)
+def check_job_status(req: https_fn.Request) -> https_fn.Response:
+    """
+    処理ジョブのステータスを確認し、完了していればSTLのダウンロードURLを返す。(REST API)
+    """
+    # CORSプリフライトリクエストに対応
+    if req.method == "OPTIONS":
+        headers = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Max-Age": "3600",
+        }
+        return https_fn.Response("", status=204, headers=headers)
+
+    # CORSヘッダーをすべてのレスポンスに設定
+    cors_headers = {"Access-Control-Allow-Origin": "*"}
+
+    # POST以外のメソッドは許可しない
+    if req.method != "POST":
+        return https_fn.Response("Method Not Allowed", status=405, headers=cors_headers)
+
+    # JSONボディからuploadIdを取得
+    upload_id = None
+    if req.is_json:
+        upload_id = req.get_json(silent=True).get("uploadId")
+
+    if not upload_id:
+        return https_fn.Response(
+            '{"error": "uploadId is required in JSON body."}',
+            status=400,
+            headers=cors_headers,
+            mimetype="application/json",
+        )
+
+    bucket_name = "dicom2stl-97760.firebasestorage.app"
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+
+    result_stl_path = f"results/{upload_id}/model.stl"
+    processing_flag_path = f"results/{upload_id}/_PROCESSING"
+    error_flag_path = f"results/{upload_id}/_ERROR"
+
+    stl_blob = bucket.blob(result_stl_path)
+    processing_blob = bucket.blob(processing_flag_path)
+    error_blob = bucket.blob(error_flag_path)
+
+    response_data = {}
+    if stl_blob.exists():
+        # 完了：署名付きURLを生成
+        url = stl_blob.generate_signed_url(
+            version="v4",
+            expiration=datetime.timedelta(minutes=15),
+            method="GET",
+        )
+        response_data = {"status": "completed", "downloadUrl": url}
+    elif error_blob.exists():
+        # エラー
+        error_message = error_blob.download_as_text()
+        response_data = {"status": "error", "message": error_message}
+    elif processing_blob.exists():
+        # 処理中
+        response_data = {"status": "processing"}
+    else:
+        response_data = {"status": "pending"}
+
+    import json
+    return https_fn.Response(
+        json.dumps(response_data),
+        headers=cors_headers,
+        mimetype="application/json"
+    )
 
 # DICOMのような重い処理を扱うため、メモリとタイムアウト時間を増やします
 @storage_fn.on_object_finalized(
@@ -27,8 +100,8 @@ def on_dicom_upload(event: storage_fn.CloudEvent) -> None:
     """
     Cloud StorageにファイルがアップロードされたときにSTL変換処理を起動するトリガー。
     """
-    bucket_name = event.data["bucket"]
-    file_path = event.data["name"]
+    bucket_name = event.data.bucket
+    file_path = event.data.name
 
     # 'uploads/' ディレクトリ以外のファイルは無視
     if not file_path.startswith("uploads/"):
@@ -42,11 +115,13 @@ def on_dicom_upload(event: storage_fn.CloudEvent) -> None:
 
     # uploadIdと各種パスを定義
     path_parts = file_path.split("/")
-    if len(path_parts) < 3:
+    # path should be: uploads/{userId}/{uploadId}/...
+    if len(path_parts) < 4:
         print(f"Invalid file path structure: {file_path}")
         return
-    upload_id = path_parts[1]
-    dicom_dir_prefix = f"uploads/{upload_id}/"
+    user_id = path_parts[1]
+    upload_id = path_parts[2]
+    dicom_dir_prefix = f"uploads/{user_id}/{upload_id}/"
     processing_flag_path = f"results/{upload_id}/_PROCESSING"
     result_stl_path = f"results/{upload_id}/model.stl"
 
@@ -71,7 +146,8 @@ def on_dicom_upload(event: storage_fn.CloudEvent) -> None:
 
         if not dicom_blobs:
             print(f"No DICOM files found in {dicom_dir_prefix}")
-            flag_blob.delete()
+            error_blob = bucket.blob(f"results/{upload_id}/_ERROR")
+            error_blob.upload_from_string(f"No DICOM files found in the specified folder: {dicom_dir_prefix}")
             return
 
         with tempfile.TemporaryDirectory() as tmpdir:
