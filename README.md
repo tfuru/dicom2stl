@@ -26,8 +26,8 @@
 
 1.  **リポジトリをクローンします:**
     ```bash
-    git clone <リポジトリのURL>
-    cd <リポジトリのディレクトリ名>
+    git clone https://github.com/tfuru/dicom2stl.git 
+    cd dicom2stl
     ```
 
 2.  **Firebase CLIをインストールし、ログインします:**
@@ -48,6 +48,29 @@
 2.  「ファイルを選択」ボタンを使い、変換したいDICOMファイル（群）をアップロードします。
 3.  処理が完了すると、3Dモデルのプレビューが表示されます。
 4.  「STLをダウンロード」ボタンをクリックして、生成されたSTLファイルを保存します。
+
+
+## 開発環境
+開発のために firebase 環境を整える手順  
+```
+npm install -g firebase-tools
+firebase login
+
+git clone https://github.com/tfuru/dicom2stl.git 
+cd dicom2stl
+
+brew install pyenv
+pyenv install 3.13.5
+pyenv local 3.13.5
+cd functions
+python3.13 -m venv venv
+. venv/bin/activate
+pip install -r requirements.txt
+cd ..
+
+firebase deploy --only functions
+firebase deploy
+```
 
 ## ライセンス
 
