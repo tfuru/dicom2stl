@@ -1,1 +1,7 @@
 firebase_functions~=0.1.0
+firebase-admin>=6.0.0
+google-cloud-storage
+pydicom
+numpy
+scikit-image
+numpy-stl
