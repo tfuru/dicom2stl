@@ -6,19 +6,23 @@ import numpy as np
 from skimage import measure
 from stl import mesh
 
-from firebase_admin import initialize_app, storage as admin_storage
-from firebase_functions import storage_fn
+from firebase_admin import initialize_app, storage as admin_storage, credentials
+from firebase_functions import options, https_fn, storage_fn
 from firebase_functions.options import set_global_options
 from google.cloud import storage
 
-# DICOMのような重い処理を扱うため、メモリとタイムアウト時間を増やします
-# リージョンはご自身の環境に合わせて変更してください
-set_global_options(region="asia-northeast1", memory="1GiB", timeout_sec=540)
+set_global_options(region=options.SupportedRegion.US_WEST1, timeout_sec=540)
 
 initialize_app()
 
+@https_fn.on_request()
+def on_request_example(request: https_fn.Request) -> str:
+    return https_fn.Response("Hello world!")
 
-@storage_fn.on_object_finalized()
+# DICOMのような重い処理を扱うため、メモリとタイムアウト時間を増やします
+@storage_fn.on_object_finalized(
+    bucket="dicom2stl-97760.firebasestorage.app",
+    memory=options.MemoryOption.GB_1)
 def on_dicom_upload(event: storage_fn.CloudEvent) -> None:
     """
     Cloud StorageにファイルがアップロードされたときにSTL変換処理を起動するトリガー。

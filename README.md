@@ -60,14 +60,9 @@ git clone https://github.com/tfuru/dicom2stl.git
 cd dicom2stl
 
 brew install pyenv
-pyenv install 3.12.4  # サポートされているバージョンに変更
 cd functions
-# 既存のvenvがある場合は、一度削除して作り直すことを推奨します
-if [ -d "venv" ]; then
-  rm -rf venv
-fi
 pyenv local 3.12.4
-python3.12 -m venv venv # venv作成時のコマンドも変更
+python3.12 -m venv venv
 . venv/bin/activate
 pip install -r requirements.txt
 cd ..
