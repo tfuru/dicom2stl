@@ -46,10 +46,9 @@
         margin-bottom: 30px;
       }
       .upload-area {
-        border: 2px dashed #dadce0;
         border-radius: 8px;
-        padding: 40px 20px;
-        margin-bottom: 20px;
+        padding: 30px 20px;
+        margin-bottom: 30px;
         cursor: pointer;
         transition: border-color 0.2s, background-color 0.2s;
       }
@@ -70,7 +69,6 @@
         cursor: pointer;
         transition: background-color 0.2s;
         width: 100%;
-        margin-top: 10px;
       }
       .upload-btn:disabled {
         background-color: #a0c3ff;
@@ -101,8 +99,8 @@
       <label for="dicom-files" class="upload-area">
         <div id="upload-prompt">クリックまたはドラッグ＆ドロップで<br>DICOMファイルを選択</div>
         <div id="file-list"></div>
+        <input type="file" id="dicom-files" multiple webkitdirectory directory>
       </label>
-      <input type="file" id="dicom-files" multiple webkitdirectory directory>
       
       <button id="upload-button" class="upload-btn" disabled>アップロードして変換開始</button>
       
@@ -160,16 +158,29 @@
             statusDiv.textContent = 'アップロードを開始します...';
 
             const uploadId = Date.now().toString() + '-' + Math.random().toString(36).substring(2);
+
+            const totalSize = selectedFiles.reduce((acc, file) => acc + file.size, 0);
+            const fileProgress = new Map();
+
             const uploadPromises = selectedFiles.map(file => {
-              const filePath = `uploads/${uploadId}/${file.webkitRelativePath || file.name}`;
-              return storage.ref(filePath).put(file);
+              const path = file.webkitRelativePath || file.name;
+              const filePath = `uploads/${uploadId}/${path}`;
+              const uploadTask = storage.ref(filePath).put(file);
+
+              uploadTask.on('state_changed', (snapshot) => {
+                fileProgress.set(path, snapshot.bytesTransferred);
+                const totalBytesTransferred = Array.from(fileProgress.values()).reduce((acc, val) => acc + val, 0);
+                const percent = totalSize > 0 ? Math.round((totalBytesTransferred / totalSize) * 100) : 0;
+                statusDiv.textContent = `アップロード中: ${percent}%`;
+              });
+
+              return uploadTask;
             });
 
             try {
               await Promise.all(uploadPromises);
               statusDiv.textContent = 'アップロード完了。STLへの変換を開始します... (バックエンド処理待機中)';
               resultDiv.innerHTML = `処理ID: ${uploadId}`;
-              // TODO: Cloud Functionを呼び出し、結果を待つ
             } catch (error) {
               console.error('Upload failed:', error);
               statusDiv.textContent = 'アップロード中にエラーが発生しました。';
